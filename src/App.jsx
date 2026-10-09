@@ -1,5 +1,25 @@
 import React, { useState, useEffect, useCallback } from "react";
 
+// Vite/browser builds have no window.storage (that API only exists inside Claude's
+// preview). Back it with localStorage so sessions and the non-CRM modules persist.
+if (!window.storage) {
+  window.storage = {
+    get: async (key) => {
+      const value = localStorage.getItem(key);
+      return value === null ? null : { key, value, shared: false };
+    },
+    set: async (key, value) => {
+      localStorage.setItem(key, value);
+      return { key, value, shared: false };
+    },
+    delete: async (key) => {
+      const existed = localStorage.getItem(key) !== null;
+      localStorage.removeItem(key);
+      return { key, deleted: existed, shared: false };
+    },
+  };
+}
+
 const FONT_LINK = "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap";
 
 const T = {
@@ -124,8 +144,6 @@ function GlobalStyle() {
 // ---------- app shell ----------
 
 export default function App() {
-  const [email, setEmail] = useState("");
-const [password, setPassword] = useState("");
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeModule, setActiveModule] = useState("dashboard");
@@ -137,57 +155,34 @@ const [password, setPassword] = useState("");
       try {
         const res = await window.storage.get("session", false);
         if (res?.value) setSession(JSON.parse(res.value));
-      } catch (e) {}
+      } catch { /* storage unavailable: continue without it */ }
       setLoading(false);
     })();
   }, []);
 
-const login = useCallback(async () => {
-  if (!email.trim() || !password) return;
+  // Backend connectivity check (kept from the original: logs the CRM leads response)
+  useEffect(() => {
+    fetch("http://localhost:4000/api/crm/leads")
+      .then((res) => res.json())
+      .then((data) => {
+        console.log("CRM Backend:", data);
+      })
+      .catch((err) => {
+        console.error("Backend connection failed:", err);
+      });
+  }, []);
 
-  try {
-    const response = await fetch("https://gl-funnel-backend.onrender.com/api/auth/login", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        email: email.trim(),
-        password,
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      alert(data.error || "Login failed");
-      return;
-    }
-
-    const s = {
-      token: data.token,
-      user: data.user,
-    };
-
+  const login = useCallback(async () => {
+    if (!name.trim() || !selectedRole) return;
+    const s = { name: name.trim(), role: selectedRole };
     setSession(s);
+    try { await window.storage.set("session", JSON.stringify(s), false); } catch { /* storage unavailable */ }
+  }, [name, selectedRole]);
 
-    try {
-      await window.storage.set(
-        "session",
-        JSON.stringify(s),
-        false
-      );
-    } catch (e) {}
-
-  } catch (error) {
-    console.error(error);
-    alert("Cannot connect to server");
-  }
-}, [email, password]);
   const logout = useCallback(async () => {
     setSession(null);
     setActiveModule("dashboard");
-    try { await window.storage.delete("session", false); } catch (e) {}
+    try { await window.storage.delete("session", false); } catch { /* storage unavailable */ }
   }, []);
 
   if (loading) {
@@ -202,7 +197,7 @@ const login = useCallback(async () => {
     return (
       <div className="gf-scope">
         <GlobalStyle />
-        
+        <LoginScreen name={name} setName={setName} selectedRole={selectedRole} setSelectedRole={setSelectedRole} login={login} />
       </div>
     );
   }
@@ -257,10 +252,10 @@ const login = useCallback(async () => {
         {activeModule === "dashboard" && <Dashboard session={session} roleInfo={roleInfo} modules={MODULES} />}
         {activeModule === "crm" && <CRM session={session} />}
         {activeModule === "projects" && <Projects session={session} />}
-        {activeModule === "hr" && <HR session={session} />}
+        {activeModule === "hr" && <HR />}
         {activeModule === "payroll" && <Payroll session={session} />}
         {activeModule === "documents" && <Documents session={session} />}
-        {activeModule === "reports" && <Reports session={session} />}
+        {activeModule === "reports" && <Reports />}
         {!["dashboard", "crm", "projects", "hr", "payroll", "documents", "reports"].includes(activeModule) && (
           <ComingSoon module={MODULES.find((m) => m.id === activeModule)} />
         )}
@@ -269,17 +264,7 @@ const login = useCallback(async () => {
   );
 }
 
-function LoginScreen({
-  name,
-  setName,
-  selectedRole,
-  setSelectedRole,
-  email,
-  setEmail,
-  password,
-  setPassword,
-  login,
-}) {
+function LoginScreen({ name, setName, selectedRole, setSelectedRole, login }) {
   return (
     <div style={S.loginWrap}>
       <div style={S.loginGrid}>
@@ -301,22 +286,9 @@ function LoginScreen({
           <h1 style={{ fontFamily: F.serif, fontSize: 22, fontWeight: 500, margin: "0 0 6px", color: T.ink }}>Welcome to GL Funnel</h1>
           <p style={{ fontSize: 13, color: T.ink70, margin: "0 0 22px" }}>Demo login, no password required at this stage.</p>
 
-          <Field label="Your email">
-            <input
-  type="email"
-  value={email}
-  onChange={e => setEmail(e.target.value)}
-  placeholder="Enter your email"
-  style={s.textInput}
-/>
-</Field>
-<input
-  type="password"
-  value={password}
-  onChange={e => setPassword(e.target.value)}
-  placeholder="Enter your password"
-  style={{ ...s.textInput, marginTop: 12 }}
-/>
+          <Field label="Your name">
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Priya Menon" style={S.textInput} />
+          </Field>
 
           <Field label="Role">
             <div style={S.roleGrid}>
@@ -413,20 +385,120 @@ function CRM({ session }) {
         try {
           const r = await window.storage.get(key, true);
           setter(r?.value ? JSON.parse(r.value) : []);
-        } catch (e) { setter([]); }
+        } catch { setter([]); }
       };
-      await Promise.all([load("crm:leads", setLeads), load("crm:contacts", setContacts), load("crm:deals", setDeals)]);
+
+      const loadLeads = async () => {
+        try {
+          const res = await fetch("http://localhost:4000/api/crm/leads");
+          if (!res.ok) throw new Error("Failed to load leads");
+
+          const data = await res.json();
+          setLeads(data);
+        } catch (e) {
+          console.error("Leads backend failed:", e);
+          await load("crm:leads", setLeads);
+        }
+      };
+
+      const loadContacts = async () => {
+        try {
+          const res = await fetch("http://localhost:4000/api/crm/contacts");
+          if (!res.ok) throw new Error("Failed to load contacts");
+
+          const data = await res.json();
+          setContacts(data);
+        } catch (e) {
+          console.error("Contacts backend failed:", e);
+          await load("crm:contacts", setContacts);
+        }
+      };
+
+      const loadDeals = async () => {
+        try {
+          const res = await fetch("http://localhost:4000/api/crm/deals");
+          if (!res.ok) throw new Error("Failed to load deals");
+
+          const data = await res.json();
+          setDeals(data);
+        } catch (e) {
+          console.error("Deals backend failed:", e);
+          await load("crm:deals", setDeals);
+        }
+      };
+
+      await Promise.all([
+        loadLeads(),
+        loadContacts(),
+        loadDeals(),
+      ]);
     })();
   }, []);
 
   const persist = useCallback(async (key, value) => {
-    try { await window.storage.set(key, JSON.stringify(value), true); } catch (e) {}
+    try { await window.storage.set(key, JSON.stringify(value), true); } catch { /* storage unavailable */ }
   }, []);
 
-  const addItem = useCallback((list, setter, key, extra) => (data) => {
-    const next = [...(list || []), { id: uid(), ...extra, ...data }];
-    setter(next); persist(key, next);
-  }, [persist]);
+  const addItem = useCallback((list, setter, key, extra) => async (data) => {
+    try {
+      let endpoint = "";
+      let body = {};
+
+      if (key === "crm:leads") {
+        endpoint = "/api/crm/leads";
+        body = {
+          name: data.name,
+          company: data.company || null,
+          source: data.source || null,
+        };
+      } else if (key === "crm:contacts") {
+        endpoint = "/api/crm/contacts";
+        body = {
+          name: data.name,
+          company: data.company || null,
+          email: data.email || null,
+          phone: data.phone || null,
+        };
+      } else if (key === "crm:deals") {
+        endpoint = "/api/crm/deals";
+        body = {
+          title: data.title,
+          customer: data.customer || null,
+          value: Number(data.value) || 0,
+        };
+      }
+
+      if (!endpoint) {
+        const next = [...(list || []), { id: uid(), ...extra, ...data }];
+        setter(next);
+        return;
+      }
+
+      const response = await fetch(`http://localhost:4000${endpoint}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          ...body,
+          ...extra,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to save");
+      }
+
+      setter((prev) => [result, ...(prev || [])]);
+      setModal(null);
+    } catch (error) {
+      console.error("Save failed:", error);
+      alert(error.message);
+    }
+  }, []);
 
   const deleteItem = useCallback((list, setter, key, id) => {
     const next = (list || []).filter((x) => x.id !== id);
@@ -646,7 +718,7 @@ function FormModal({ title, fields, onClose, onSave, submitLabel }) {
 // ---------- shared data-loading helpers for the modules below ----------
 
 async function persistKV(key, value) {
-  try { await window.storage.set(key, JSON.stringify(value), true); } catch (e) {}
+  try { await window.storage.set(key, JSON.stringify(value), true); } catch { /* storage unavailable */ }
 }
 
 // Loads several storage keys at once into one state object, keyed by short name.
@@ -659,10 +731,11 @@ function useStorage(pairs) {
         try {
           const r = await window.storage.get(key, true);
           return [name, r?.value ? JSON.parse(r.value) : []];
-        } catch (e) { return [name, []]; }
+        } catch { return [name, []]; }
       }));
       setState(Object.fromEntries(entries));
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // returns an updater(name, key) => (nextValueOrFn) that updates local state and persists
@@ -855,7 +928,7 @@ function Projects({ session }) {
 
 // ---------- Level 4: HR ----------
 
-function HR({ session }) {
+function HR() {
   const [tab, setTab] = useState("employees");
   const [data, field] = useStorage([["employees", "hr:employees"], ["attendance", "hr:attendance"], ["leave", "hr:leave"]]);
   const [modal, setModal] = useState(null);
@@ -1213,7 +1286,7 @@ function ComingSoon({ module }) {
   );
 }
 
-const s = {
+const S = {
   centerScreen: { minHeight: 400, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 12 },
   shell: { display: "flex", minHeight: 580, background: T.paper, borderRadius: 14, overflow: "hidden", border: `1px solid ${T.line}` },
   sidebar: { width: 240, flexShrink: 0, background: T.ink, padding: "22px 14px", display: "flex", flexDirection: "column" },
