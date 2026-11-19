@@ -20,9 +20,15 @@ if (!window.storage) {
   };
 }
 
-// Backend address. Set VITE_API_URL in production (e.g. https://your-backend.onrender.com).
-// Local dev defaults to localhost:4000. An empty value runs the CRM in local-only demo mode.
-const API_URL = (import.meta.env.VITE_API_URL ?? "http://localhost:4000").replace(/\/$/, "");
+// Use the local API automatically only during development. A production build
+// must opt into a real backend URL; localhost in a visitor's browser is not the
+// deployed server. Without an API URL, CRM runs in its existing local demo mode.
+const configuredApiUrl = (import.meta.env.VITE_API_URL ?? "").trim();
+const isLoopbackApi = /^https?:\/\/(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:\/|$)/i.test(configuredApiUrl);
+const API_URL = (import.meta.env.PROD && isLoopbackApi
+  ? ""
+  : configuredApiUrl || (import.meta.env.DEV ? "http://localhost:4000" : "")
+).replace(/\/$/, "");
 const LOCAL_ONLY = !API_URL;
 
 const FONT_LINK = "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap";
