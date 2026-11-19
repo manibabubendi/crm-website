@@ -870,6 +870,27 @@ function ApprovalPill({ status }) {
 // ---------- Level 3: Projects & tasks ----------
 
 const PROJECT_STATUSES = ["Planning", "Active", "On hold", "Completed"];
+
+function ProjectProgress({ tasks, status }) {
+  const completed = tasks.filter((task) => task.status === "completed").length;
+  const total = tasks.length;
+  const percent = total ? Math.round((completed / total) * 100) : status === "Completed" ? 100 : 0;
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 11.5, color: T.ink70 }}>
+        <span>Progress report</span>
+        <span style={{ fontFamily: F.mono, fontWeight: 500 }}>{percent}%</span>
+      </div>
+      <div role="progressbar" aria-label="Project progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}
+        style={{ marginTop: 6, height: 8, borderRadius: 4, background: T.lineSoft, overflow: "hidden" }}>
+        <div style={{ width: `${percent}%`, height: "100%", background: T.teal, transition: "width 180ms ease" }} />
+      </div>
+      <div style={{ fontSize: 11, color: T.ink50, marginTop: 5 }}>
+        {completed} of {total} tasks complete{total === 0 && status !== "Completed" ? " · Complete tasks to update" : ""}
+      </div>
+    </div>
+  );
+}
 const TASK_STAGES = [
   { id: "pending", label: "Pending" },
   { id: "in_progress", label: "In progress" },
@@ -888,10 +909,12 @@ function Projects({ session }) {
   const { projects, tasks } = data;
 
   const addProject = (v) => setProjects((prev) => [...prev, { id: uid(), status: "Planning", ...v }]);
-  const deleteProject = (id) => {
-    setProjects((prev) => prev.filter((p) => p.id !== id));
-    setTasks((prev) => prev.filter((t) => t.projectId !== id));
-    if (selected === id) setSelected(null);
+  const deleteProject = (project) => {
+    const confirmed = window.confirm(`Remove project "${project.name}" and all of its tasks?`);
+    if (!confirmed) return;
+    setProjects((prev) => prev.filter((p) => p.id !== project.id));
+    setTasks((prev) => prev.filter((t) => t.projectId !== project.id));
+    if (selected === project.id) setSelected(null);
   };
   const addTask = (projectId) => (v) => setTasks((prev) => [...prev, { id: uid(), projectId, status: "pending", ...v }]);
   const moveTask = (id, status) => setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, status } : t)));
@@ -909,9 +932,10 @@ function Projects({ session }) {
         </div>
         <ModuleHeader eyebrow={project.status} title={project.name}
           right={<Pill bg={T.tealTint} color={T.tealDeep}>{projectTasks.filter((t) => t.status === "completed").length}/{projectTasks.length} done</Pill>} />
-        <p style={{ fontSize: 13, color: T.ink70, marginTop: -12, marginBottom: 20 }}>
+        <p style={{ fontSize: 13, color: T.ink70, marginTop: -12, marginBottom: 12 }}>
           Manager: {project.manager || "—"} · Members: {project.members || "—"}
         </p>
+        <ProjectProgress tasks={projectTasks} status={project.status} />
 
         <AddBtn label="New task" onClick={() => setModal("task")} />
 
@@ -967,19 +991,24 @@ function Projects({ session }) {
         <div style={S.cardGrid}>
           {projects.map((p) => {
             const pTasks = tasks.filter((t) => t.projectId === p.id);
-            const pct = pTasks.length ? Math.round((pTasks.filter((t) => t.status === "completed").length / pTasks.length) * 100) : 0;
             return (
               <div key={p.id} style={{ ...S.contactCard, cursor: "pointer" }} onClick={() => setSelected(p.id)}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <div style={{ fontSize: 14, fontWeight: 500, color: T.ink }}>{p.name}</div>
-                  <TinyBtn icon="trash" label="Delete project" onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }} />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                  <div style={{ minWidth: 0, fontSize: 14, fontWeight: 500, color: T.ink }}>{p.name}</div>
+                  <button
+                    type="button"
+                    onClick={(event) => { event.stopPropagation(); deleteProject(p); }}
+                    style={{ ...S.tinyBtn, flexShrink: 0, gap: 4, padding: "4px 6px", border: `1px solid ${T.coralTint}`, borderRadius: 6, color: T.coral, fontSize: 10.5, fontWeight: 500 }}
+                    aria-label={`Remove project ${p.name}`}
+                    title="Remove Project"
+                  >
+                    <Icon name="trash" size={12} />
+                    <span>Remove Project</span>
+                  </button>
                 </div>
                 <div style={{ fontSize: 11.5, color: T.ink50, marginTop: 4 }}>{p.manager || "No manager set"}</div>
-                <Pill bg={T.lineSoft} color={T.ink70}>{p.status}</Pill>
-                <div style={{ marginTop: 10, height: 6, borderRadius: 3, background: T.lineSoft, overflow: "hidden" }}>
-                  <div style={{ width: `${pct}%`, height: "100%", background: T.teal }} />
-                </div>
-                <div style={{ fontSize: 11, color: T.ink50, marginTop: 6 }}>{pct}% complete · {pTasks.length} tasks</div>
+                <div style={{ marginTop: 8 }}><Pill bg={T.lineSoft} color={T.ink70}>{p.status}</Pill></div>
+                <ProjectProgress tasks={pTasks} status={p.status} />
               </div>
             );
           })}
