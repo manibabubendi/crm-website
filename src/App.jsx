@@ -959,6 +959,16 @@ function Projects({ session }) {
                         <TinyBtn icon="trash" size={12} label="Delete task" onClick={() => deleteTask(t.id)} />
                         <TinyBtn icon="chevron-right" label="Move forward" disabled={si === TASK_STAGES.length - 1} onClick={() => moveTask(t.id, TASK_STAGES[si + 1].id)} />
                       </div>
+                      {stage.id !== "completed" && (
+                        <button
+                          type="button"
+                          onClick={() => moveTask(t.id, "completed")}
+                          style={{ ...S.smallPrimaryBtn, width: "100%", justifyContent: "center", marginTop: 8, height: 29 }}
+                          aria-label={`Mark ${t.title} complete`}
+                        >
+                          <Icon name="check" size={13} style={{ marginRight: 5 }} />Mark complete
+                        </button>
+                      )}
                     </div>
                   );
                 })}
