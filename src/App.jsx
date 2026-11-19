@@ -25,9 +25,9 @@ if (!window.storage) {
 // deployed server. Without an API URL, CRM runs in its existing local demo mode.
 const configuredApiUrl = (import.meta.env.VITE_API_URL ?? "").trim();
 const isLoopbackApi = /^https?:\/\/(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:\/|$)/i.test(configuredApiUrl);
-const API_URL = (import.meta.env.PROD && isLoopbackApi
-  ? ""
-  : configuredApiUrl || (import.meta.env.DEV ? "http://localhost:4000" : "")
+const API_URL = (import.meta.env.PROD
+  ? (configuredApiUrl && !isLoopbackApi ? configuredApiUrl : "https://gl-funnel-backend.onrender.com")
+  : configuredApiUrl || "http://localhost:4000"
 ).replace(/\/$/, "");
 const LOCAL_ONLY = !API_URL;
 
