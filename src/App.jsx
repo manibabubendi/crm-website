@@ -747,7 +747,10 @@ function EmptyState({ icon, title, body }) {
 // near-identical Deal/Lead/Contact forms.
 function FormModal({ title, fields, onClose, onSave, submitLabel }) {
   const [values, setValues] = useState(() =>
-    Object.fromEntries(fields.map((f) => [f.key, f.type === "select" ? f.options[0] : ""]))
+    Object.fromEntries(fields.map((f) => {
+      const first = f.options?.[0];
+      return [f.key, f.type === "select" ? (typeof first === "object" ? first.value : first) : ""];
+    }))
   );
   const [error, setError] = useState("");
 
@@ -773,7 +776,11 @@ function FormModal({ title, fields, onClose, onSave, submitLabel }) {
             <Field key={f.key} label={f.label}>
               {f.type === "select" ? (
                 <select value={values[f.key]} onChange={set(f.key)} style={S.textInput}>
-                  {f.options.map((o) => <option key={o}>{o}</option>)}
+                  {f.options.map((o) => {
+                    const value = typeof o === "object" ? o.value : o;
+                    const label = typeof o === "object" ? o.label : o;
+                    return <option key={value} value={value}>{label}</option>;
+                  })}
                 </select>
               ) : (
                 <input type={f.type || "text"} value={values[f.key]} onChange={set(f.key)} placeholder={f.placeholder} style={S.textInput} />
@@ -1190,6 +1197,8 @@ function Payroll({ session }) {
   const [tab, setTab] = useState("payroll");
   const [data, field] = useStorage([["employees", "hr:employees"], ["payroll", "fin:payroll"], ["expenses", "fin:expenses"]]);
   const [modal, setModal] = useState(null);
+  const [actionError, setActionError] = useState("");
+  const [payrollTargets, setPayrollTargets] = useState({});
 
   if (!data) return <div style={S.comingSoon}><span style={{ fontSize: 13, color: T.ink50 }}>Loading payroll data...</span></div>;
 
@@ -1197,10 +1206,64 @@ function Payroll({ session }) {
   const setExpenses = field("expenses", "fin:expenses");
   const { employees, payroll, expenses } = data;
   const empOptions = employees.length ? employees.map((e) => e.name) : [session.name];
+  const payrollOptions = payroll.map((p) => ({
+    value: String(p.id),
+    label: `${p.employee} · ${p.payPeriod || "No pay period"} · ${money(p.amount)}`,
+  }));
+  const cents = (value) => Math.round((Number(value) + Number.EPSILON) * 100);
 
-  const addPayroll = (v) => setPayroll((prev) => [...prev, { id: uid(), ...v }]);
-  const delPayroll = (id) => setPayroll((prev) => prev.filter((p) => p.id !== id));
-  const addExpense = (v) => setExpenses((prev) => [...prev, { id: uid(), submittedBy: session.name, status: "Pending", ...v }]);
+  const addPayroll = (v) => setPayroll((prev) => [...prev, { id: uid(), ...v, amount: cents(v.amount) / 100 }]);
+  const delPayroll = (entry) => {
+    const confirmed = window.confirm(`Remove payroll entry for ${entry.employee} · ${entry.payPeriod || "No pay period"}? Expense approval history will remain in Expenses.`);
+    if (confirmed) setPayroll((prev) => prev.filter((p) => p.id !== entry.id));
+  };
+  const addExpense = (v) => {
+    const target = payroll.find((p) => String(p.id) === String(v.payrollId));
+    if (!target) {
+      setActionError("Choose a valid payroll entry before submitting this expense.");
+      return;
+    }
+    const amount = cents(v.amount) / 100;
+    setExpenses((prev) => [...prev, {
+      ...v, id: uid(), amount, payrollId: target.id,
+      payrollEmployee: target.employee, payrollPeriod: target.payPeriod || "No pay period",
+      submittedBy: session.name, status: "Pending",
+    }]);
+    setActionError("");
+  };
+  const getPayrollTarget = (expense) => {
+    const targetId = payrollTargets[expense.id] || expense.payrollId;
+    if (targetId) return payroll.find((p) => String(p.id) === String(targetId)) || null;
+    const employee = expense.payrollEmployee || expense.submittedBy;
+    const matches = payroll.filter((p) => p.employee === employee);
+    return matches.length === 1 ? matches[0] : null;
+  };
+  const approveExpense = (expense) => {
+    setActionError("");
+    const amountCents = cents(expense.amount);
+    if (!Number.isFinite(Number(expense.amount)) || amountCents <= 0) {
+      setActionError("The expense amount must be greater than zero.");
+      return;
+    }
+    const target = getPayrollTarget(expense);
+    if (!target) {
+      setActionError("Select the payroll entry this expense should be deducted from.");
+      return;
+    }
+    const availableCents = cents(target.amount);
+    if (amountCents > availableCents) {
+      setActionError(`Cannot approve ${money(expense.amount)}; ${target.employee}'s payroll entry has only ${money(target.amount)} remaining.`);
+      return;
+    }
+    if (!window.confirm(`Approve ${money(expense.amount)} and deduct it from ${target.employee}'s ${target.payPeriod || "payroll entry"}?`)) return;
+    const remaining = (availableCents - amountCents) / 100;
+    setPayroll((prev) => prev.map((p) => p.id === target.id ? { ...p, amount: remaining } : p));
+    setExpenses((prev) => prev.map((e) => e.id === expense.id ? {
+      ...e, status: "Approved", payrollId: target.id,
+      payrollEmployee: target.employee, payrollPeriod: target.payPeriod || "No pay period",
+      deductedAmount: amountCents / 100,
+    } : e));
+  };
   const setExpenseStatus = (id, status) => setExpenses((prev) => prev.map((e) => (e.id === id ? { ...e, status } : e)));
 
   const TABS = [
@@ -1212,23 +1275,46 @@ function Payroll({ session }) {
     <div>
       <ModuleHeader eyebrow="Finance" title="Payroll & expenses" />
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
-      <AddBtn label={tab === "payroll" ? "Add payroll entry" : "Submit expense"} onClick={() => setModal(tab === "payroll" ? "payroll" : "expense")} />
+      <AddBtn label={tab === "payroll" ? "Add payroll entry" : "Submit expense"} onClick={() => {
+        setActionError("");
+        if (tab === "expenses" && payroll.length === 0) {
+          setActionError("Add a payroll entry before submitting an expense so it can be deducted when approved.");
+          return;
+        }
+        setModal(tab === "payroll" ? "payroll" : "expense");
+      }} />
+      {actionError && <ErrorBanner message={actionError} />}
 
       {tab === "payroll" && (
         payroll.length === 0 ? <EmptyState icon="receipt-2" title="No payroll entries" body="Record salary payouts per pay period." /> : (
           <div style={S.listWrap}>
-            {payroll.map((p, i) => (
-              <div key={p.id} style={{ ...S.listRow, borderTop: i === 0 ? "none" : `1px solid ${T.lineSoft}` }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: T.ink }}>{p.employee}</div>
-                  <div style={{ fontSize: 11.5, color: T.ink50, marginTop: 2 }}>{p.payPeriod}</div>
+            {payroll.map((p, i) => {
+              const deducted = expenses
+                .filter((e) => e.status === "Approved" && String(e.payrollId) === String(p.id))
+                .reduce((sum, e) => sum + (Number(e.deductedAmount ?? e.amount) || 0), 0);
+              return (
+                <div key={p.id} style={{ ...S.listRow, borderTop: i === 0 ? "none" : `1px solid ${T.lineSoft}` }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: T.ink }}>{p.employee}</div>
+                    <div style={{ fontSize: 11.5, color: T.ink50, marginTop: 2 }}>{p.payPeriod}</div>
+                    {deducted > 0 && <div style={{ fontSize: 11, color: T.coral, marginTop: 3 }}>{money(deducted)} deducted for approved expenses</div>}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontFamily: F.mono, fontSize: 13, color: T.tealDeep }}>{money(p.amount)}</span>
+                    <button
+                      type="button"
+                      onClick={() => delPayroll(p)}
+                      style={{ ...S.tinyBtn, gap: 4, padding: "5px 8px", border: `1px solid ${T.coralTint}`, borderRadius: 6, color: T.coral, fontSize: 11, fontWeight: 500 }}
+                      aria-label={`Remove payroll entry for ${p.employee}`}
+                      title="Remove Payroll entry"
+                    >
+                      <Icon name="trash" size={12} />
+                      <span>Remove Payroll entry</span>
+                    </button>
+                  </div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontFamily: F.mono, fontSize: 13, color: T.tealDeep }}>{money(p.amount)}</span>
-                  <TinyBtn icon="trash" label="Delete entry" onClick={() => delPayroll(p.id)} />
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )
       )}
@@ -1236,24 +1322,57 @@ function Payroll({ session }) {
       {tab === "expenses" && (
         expenses.length === 0 ? <EmptyState icon="wallet" title="No expenses submitted" body="Submit a business expense for review." /> : (
           <div style={S.listWrap}>
-            {expenses.map((e, i) => (
-              <div key={e.id} style={{ ...S.listRow, borderTop: i === 0 ? "none" : `1px solid ${T.lineSoft}`, alignItems: "flex-start" }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: T.ink }}>{e.category} · {money(e.amount)}</div>
-                  <div style={{ fontSize: 11.5, color: T.ink50, marginTop: 2 }}>{e.date} · {e.submittedBy}</div>
-                  {e.description && <div style={{ fontSize: 11.5, color: T.ink70, marginTop: 4 }}>{e.description}</div>}
+            {expenses.map((e, i) => {
+              const target = getPayrollTarget(e);
+              return (
+                <div key={e.id} style={{ ...S.listRow, borderTop: i === 0 ? "none" : `1px solid ${T.lineSoft}`, alignItems: "flex-start", gap: 12 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: T.ink }}>{e.category} · {money(e.amount)}</div>
+                    <div style={{ fontSize: 11.5, color: T.ink50, marginTop: 2 }}>{e.date} · {e.submittedBy}</div>
+                    {e.description && <div style={{ fontSize: 11.5, color: T.ink70, marginTop: 4 }}>{e.description}</div>}
+                    {e.status === "Approved" && (e.payrollId || e.deductedAmount != null) ? (
+                      <div style={{ fontSize: 11.5, color: T.coral, marginTop: 4 }}>
+                        Deducted {money(e.deductedAmount ?? e.amount)} from {e.payrollEmployee || target?.employee || "payroll"} · {e.payrollPeriod || target?.payPeriod || "pay period"}
+                      </div>
+                    ) : e.status === "Approved" ? (
+                      <div style={{ fontSize: 11.5, color: T.ink50, marginTop: 4 }}>Approved · no payroll deduction was recorded for this older entry</div>
+                    ) : e.status === "Pending" && target ? (
+                      <div style={{ fontSize: 11.5, color: T.ink50, marginTop: 4 }}>Deduct from {target.employee} · {target.payPeriod || "No pay period"}</div>
+                    ) : e.status === "Pending" ? (
+                      <div style={{ marginTop: 5 }}>
+                        {payroll.length > 0 ? (
+                          <select
+                            aria-label={`Select payroll entry for ${e.category} expense`}
+                            value={payrollTargets[e.id] || ""}
+                            onChange={(event) => setPayrollTargets((prev) => ({ ...prev, [e.id]: event.target.value }))}
+                            style={{ ...S.textInput, height: 32, maxWidth: 310, fontSize: 11.5 }}
+                          >
+                            <option value="">Select payroll entry</option>
+                            {payrollOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                          </select>
+                        ) : <span style={{ fontSize: 11.5, color: T.coral }}>Add a payroll entry before approval.</span>}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                    <ApprovalPill status={e.status} />
+                    {e.status === "Pending" && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => approveExpense(e)}
+                          style={{ ...S.smallPrimaryBtn, height: 28, padding: "0 9px", gap: 4 }}
+                          aria-label={`Approve ${e.category} expense`}
+                        >
+                          <Icon name="check" size={13} />Approve
+                        </button>
+                        <TinyBtn icon="x" label="Reject" onClick={() => setExpenseStatus(e.id, "Rejected")} />
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <ApprovalPill status={e.status} />
-                  {e.status === "Pending" && (
-                    <>
-                      <TinyBtn icon="check" label="Approve" onClick={() => setExpenseStatus(e.id, "Approved")} />
-                      <TinyBtn icon="x" label="Reject" onClick={() => setExpenseStatus(e.id, "Rejected")} />
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )
       )}
@@ -1271,6 +1390,7 @@ function Payroll({ session }) {
         <FormModal title="Submit expense" onClose={() => setModal(null)}
           fields={[
             { key: "category", label: "Category", type: "select", options: ["Travel", "Meals", "Software", "Office supplies", "Other"] },
+            { key: "payrollId", label: "Deduct from payroll entry", type: "select", options: payrollOptions, required: true },
             { key: "amount", label: "Amount ($)", type: "number", placeholder: "120", required: true },
             { key: "date", label: "Date", type: "date" },
             { key: "description", label: "Description", placeholder: "Optional" },
