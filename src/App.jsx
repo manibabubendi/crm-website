@@ -20,12 +20,14 @@ if (!window.storage) {
   };
 }
 
-// Use the local API automatically only during development. Production must opt
-// into a real backend URL; a visitor's localhost is not the deployed server.
-// Without a configured backend, CRM stays in browser-local demo mode.
+// Production starts in browser-local demo mode. Shared server data requires an
+// explicit VITE_DEMO_MODE=false plus a public API URL; localhost is not the
+// deployed server. Development can still use the local API by default.
 const configuredApiUrl = (import.meta.env.VITE_API_URL ?? "").trim();
 const isLoopbackApi = /^https?:\/\/(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:\/|$)/i.test(configuredApiUrl);
-const demoModeRequested = import.meta.env.VITE_DEMO_MODE === "true";
+const demoModeRequested = import.meta.env.PROD
+  ? import.meta.env.VITE_DEMO_MODE !== "false"
+  : import.meta.env.VITE_DEMO_MODE === "true";
 const API_URL = (demoModeRequested
   ? ""
   : import.meta.env.PROD
