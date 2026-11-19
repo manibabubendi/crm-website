@@ -1015,7 +1015,10 @@ function HR() {
   const empOptions = employees.length ? employees.map((e) => e.name) : ["No employees yet"];
 
   const addEmployee = (v) => setEmployees((prev) => [...prev, { id: uid(), ...v }]);
-  const delEmployee = (id) => setEmployees((prev) => prev.filter((e) => e.id !== id));
+  const delEmployee = (employee) => {
+    const confirmed = window.confirm(`Remove ${employee.name} from the employee list? Existing attendance and leave history will remain.`);
+    if (confirmed) setEmployees((prev) => prev.filter((e) => e.id !== employee.id));
+  };
   const addAttendance = (v) => setAttendance((prev) => [...prev, { id: uid(), ...v }]);
   const delAttendance = (id) => setAttendance((prev) => prev.filter((a) => a.id !== id));
   const addLeave = (v) => setLeave((prev) => [...prev, { id: uid(), status: "Pending", ...v }]);
@@ -1046,7 +1049,16 @@ function HR() {
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <span style={{ fontSize: 11.5, color: T.ink50, fontFamily: F.mono }}>{e.joiningDate}</span>
-                  <TinyBtn icon="trash" label="Remove employee" onClick={() => delEmployee(e.id)} />
+                  <button
+                    type="button"
+                    onClick={() => delEmployee(e)}
+                    style={{ ...S.tinyBtn, gap: 5, padding: "5px 9px", border: `1px solid ${T.coralTint}`, borderRadius: 6, color: T.coral, fontSize: 11.5, fontWeight: 500 }}
+                    aria-label={`Remove ${e.name}`}
+                    title={`Remove ${e.name}`}
+                  >
+                    <Icon name="trash" size={13} />
+                    <span>Remove</span>
+                  </button>
                 </div>
               </div>
             ))}
