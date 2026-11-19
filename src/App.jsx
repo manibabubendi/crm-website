@@ -20,16 +20,19 @@ if (!window.storage) {
   };
 }
 
-// Use the local API automatically only during development. A production build
-// must opt into a real backend URL; localhost in a visitor's browser is not the
-// deployed server. Without an API URL, CRM runs in its existing local demo mode.
+// Use the local API automatically only during development. Production must opt
+// into a real backend URL; a visitor's localhost is not the deployed server.
+// Without a configured backend, CRM stays in browser-local demo mode.
 const configuredApiUrl = (import.meta.env.VITE_API_URL ?? "").trim();
 const isLoopbackApi = /^https?:\/\/(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:\/|$)/i.test(configuredApiUrl);
-const API_URL = (import.meta.env.PROD
-  ? (configuredApiUrl && !isLoopbackApi ? configuredApiUrl : "https://gl-funnel-backend.onrender.com")
-  : configuredApiUrl || "http://localhost:4000"
+const demoModeRequested = import.meta.env.VITE_DEMO_MODE === "true";
+const API_URL = (demoModeRequested
+  ? ""
+  : import.meta.env.PROD
+    ? (configuredApiUrl && !isLoopbackApi ? configuredApiUrl : "")
+    : configuredApiUrl || "http://localhost:4000"
 ).replace(/\/$/, "");
-const LOCAL_ONLY = !API_URL;
+const LOCAL_ONLY = demoModeRequested || !API_URL;
 
 const FONT_LINK = "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap";
 
@@ -603,7 +606,7 @@ function CRM({ session }) {
   return (
     <div>
       {LOCAL_ONLY && (
-        <div style={S.demoNote}>Demo mode: no backend connected. Data you add here is saved in this browser only.</div>
+        <div style={S.demoNote}><strong>Demo mode:</strong> Data is saved in this browser only and will not sync across devices. Shared data requires a connected backend and database.</div>
       )}
       <BackendStatus status={backend} />
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22 }}>
