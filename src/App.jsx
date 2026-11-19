@@ -20,6 +20,11 @@ if (!window.storage) {
   };
 }
 
+// Backend address. Set VITE_API_URL in production (e.g. https://your-backend.onrender.com).
+// Local dev defaults to localhost:4000. An empty value runs the CRM in local-only demo mode.
+const API_URL = (import.meta.env.VITE_API_URL ?? "http://localhost:4000").replace(/\/$/, "");
+const LOCAL_ONLY = !API_URL;
+
 const FONT_LINK = "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap";
 
 const T = {
@@ -162,7 +167,8 @@ export default function App() {
 
   // Backend connectivity check (kept from the original: logs the CRM leads response)
   useEffect(() => {
-    fetch("http://localhost:4000/api/crm/leads")
+    if (LOCAL_ONLY) return;
+    fetch(`${API_URL}/api/crm/leads`)
       .then((res) => res.json())
       .then((data) => {
         console.log("CRM Backend:", data);
@@ -182,6 +188,8 @@ export default function App() {
   const logout = useCallback(async () => {
     setSession(null);
     setActiveModule("dashboard");
+    setName("");
+    setSelectedRole(null);
     try { await window.storage.delete("session", false); } catch { /* storage unavailable */ }
   }, []);
 
@@ -243,8 +251,10 @@ export default function App() {
               </div>
               <div style={{ fontSize: 11, color: "rgba(247,244,236,.5)" }}>{roleInfo?.label}</div>
             </div>
-            <button onClick={logout} style={S.iconBtn} aria-label="Log out"><Icon name="logout" size={15} /></button>
           </div>
+          <button onClick={logout} style={S.logoutBtn} aria-label="Log out">
+            <Icon name="logout" size={15} /> Log out
+          </button>
         </div>
       </aside>
 
@@ -370,6 +380,39 @@ function Dashboard({ session, roleInfo, modules }) {
   );
 }
 
+// Sends a PATCH/DELETE to the backend and throws a readable error if it fails,
+// so a change is never shown as saved when the server rejected it.
+async function backendCall(path, options = {}) {
+  const res = await fetch(`${API_URL}${path}`, {
+    credentials: "include",
+    headers: options.body ? { "Content-Type": "application/json" } : undefined,
+    ...options,
+  });
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const body = await res.json();
+      if (body.error) message = body.error;
+    } catch { /* response had no JSON body */ }
+    throw new Error(message);
+  }
+}
+
+// Shows whether the CRM is talking to the backend, so a connection problem is visible
+// instead of only appearing in the browser console.
+function BackendStatus({ status }) {
+  if (status.state === "demo") return null; // the demo note already explains this
+  const tone = {
+    checking: { bg: T.lineSoft, tx: T.ink70, text: `Connecting to backend at ${API_URL} ...` },
+    connected: { bg: T.tealTint, tx: T.tealDeep, text: `Backend connected · ${API_URL}` },
+    offline: {
+      bg: T.coralTint, tx: "#8A3E13",
+      text: `Backend not reachable at ${API_URL} (${status.reason}). Showing data saved in this browser instead. Check the server is running and that its CORS setting allows ${window.location.origin}.`,
+    },
+  }[status.state];
+  return <div style={{ background: tone.bg, color: tone.tx, fontSize: 12.5, borderRadius: 8, padding: "8px 12px", marginBottom: 16 }}>{tone.text}</div>;
+}
+
 // ---------- CRM module ----------
 
 function CRM({ session }) {
@@ -378,6 +421,7 @@ function CRM({ session }) {
   const [contacts, setContacts] = useState(null);
   const [deals, setDeals] = useState(null);
   const [modal, setModal] = useState(null); // "deal" | "lead" | "contact" | null
+  const [backend, setBackend] = useState(LOCAL_ONLY ? { state: "demo" } : { state: "checking" });
 
   useEffect(() => {
     (async () => {
@@ -390,42 +434,53 @@ function CRM({ session }) {
 
       const loadLeads = async () => {
         try {
-          const res = await fetch("http://localhost:4000/api/crm/leads");
-          if (!res.ok) throw new Error("Failed to load leads");
+          const res = await fetch(`${API_URL}/api/crm/leads`);
+          if (!res.ok) throw new Error(`Failed to load leads (${res.status})`);
 
           const data = await res.json();
           setLeads(data);
+          setBackend((b) => (b.state === "offline" ? b : { state: "connected" }));
         } catch (e) {
           console.error("Leads backend failed:", e);
+          setBackend({ state: "offline", reason: e.message });
           await load("crm:leads", setLeads);
         }
       };
 
       const loadContacts = async () => {
         try {
-          const res = await fetch("http://localhost:4000/api/crm/contacts");
-          if (!res.ok) throw new Error("Failed to load contacts");
+          const res = await fetch(`${API_URL}/api/crm/contacts`);
+          if (!res.ok) throw new Error(`Failed to load contacts (${res.status})`);
 
           const data = await res.json();
           setContacts(data);
+          setBackend((b) => (b.state === "offline" ? b : { state: "connected" }));
         } catch (e) {
           console.error("Contacts backend failed:", e);
+          setBackend({ state: "offline", reason: e.message });
           await load("crm:contacts", setContacts);
         }
       };
 
       const loadDeals = async () => {
         try {
-          const res = await fetch("http://localhost:4000/api/crm/deals");
-          if (!res.ok) throw new Error("Failed to load deals");
+          const res = await fetch(`${API_URL}/api/crm/deals`);
+          if (!res.ok) throw new Error(`Failed to load deals (${res.status})`);
 
           const data = await res.json();
           setDeals(data);
+          setBackend((b) => (b.state === "offline" ? b : { state: "connected" }));
         } catch (e) {
           console.error("Deals backend failed:", e);
+          setBackend({ state: "offline", reason: e.message });
           await load("crm:deals", setDeals);
         }
       };
+
+      if (LOCAL_ONLY) {
+        await Promise.all([load("crm:leads", setLeads), load("crm:contacts", setContacts), load("crm:deals", setDeals)]);
+        return;
+      }
 
       await Promise.all([
         loadLeads(),
@@ -468,13 +523,14 @@ function CRM({ session }) {
         };
       }
 
-      if (!endpoint) {
+      if (!endpoint || LOCAL_ONLY) {
         const next = [...(list || []), { id: uid(), ...extra, ...data }];
         setter(next);
+        persist(key, next);
         return;
       }
 
-      const response = await fetch(`http://localhost:4000${endpoint}`, {
+      const response = await fetch(`${API_URL}${endpoint}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -498,16 +554,29 @@ function CRM({ session }) {
       console.error("Save failed:", error);
       alert(error.message);
     }
-  }, []);
-
-  const deleteItem = useCallback((list, setter, key, id) => {
-    const next = (list || []).filter((x) => x.id !== id);
-    setter(next); persist(key, next);
   }, [persist]);
 
-  const moveDeal = useCallback((id, stage) => {
-    const next = (deals || []).map((d) => (d.id === id ? { ...d, stage } : d));
-    setDeals(next); persist("crm:deals", next);
+  const deleteItem = useCallback(async (list, setter, key, id) => {
+    const resource = { "crm:leads": "leads", "crm:contacts": "contacts", "crm:deals": "deals" }[key];
+    try {
+      if (resource && !LOCAL_ONLY) await backendCall(`/api/crm/${resource}/${id}`, { method: "DELETE" });
+      const next = (list || []).filter((x) => x.id !== id);
+      setter(next); persist(key, next);
+    } catch (error) {
+      console.error("Delete failed:", error);
+      alert(error.message);
+    }
+  }, [persist]);
+
+  const moveDeal = useCallback(async (id, stage) => {
+    try {
+      if (!LOCAL_ONLY) await backendCall(`/api/crm/deals/${id}/stage`, { method: "PATCH", body: JSON.stringify({ stage }) });
+      const next = (deals || []).map((d) => (d.id === id ? { ...d, stage } : d));
+      setDeals(next); persist("crm:deals", next);
+    } catch (error) {
+      console.error("Move failed:", error);
+      alert(error.message);
+    }
   }, [deals, persist]);
 
   if (leads === null || contacts === null || deals === null) {
@@ -527,6 +596,10 @@ function CRM({ session }) {
 
   return (
     <div>
+      {LOCAL_ONLY && (
+        <div style={S.demoNote}>Demo mode: no backend connected. Data you add here is saved in this browser only.</div>
+      )}
+      <BackendStatus status={backend} />
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 22 }}>
         <div>
           <div style={{ fontSize: 12, letterSpacing: ".04em", color: T.ink50, textTransform: "uppercase", marginBottom: 4 }}>CRM and sales</div>
@@ -1294,6 +1367,8 @@ const S = {
   levelBadge: { fontSize: 9.5, color: "rgba(247,244,236,.4)", border: "1px solid rgba(247,244,236,.18)", borderRadius: 4, padding: "1px 5px", fontFamily: F.mono },
   sidebarFooter: { marginTop: "auto", paddingTop: 14, borderTop: "1px solid rgba(247,244,236,.10)" },
   avatar: { width: 30, height: 30, borderRadius: "50%", background: T.tealDeep, color: T.paper, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11.5, fontWeight: 500, flexShrink: 0 },
+  demoNote: { background: T.goldTint, color: "#7A5A1C", fontSize: 12.5, borderRadius: 8, padding: "8px 12px", marginBottom: 16 },
+  logoutBtn: { width: "100%", marginTop: 12, height: 34, background: "rgba(247,244,236,.08)", border: "1px solid rgba(247,244,236,.18)", borderRadius: 8, color: "rgba(247,244,236,.85)", fontSize: 12.5, fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" },
   iconBtn: { background: "transparent", border: "none", width: 28, height: 28, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "rgba(247,244,236,.6)" },
   main: { flex: 1, padding: "30px 34px", overflow: "auto", background: T.paper },
   loginWrap: { minHeight: 580, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem 0", background: T.paper, borderRadius: 14 },
